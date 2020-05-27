@@ -1,4 +1,4 @@
-# Digital Trust PoC
+# GADI Example
 
 ## Prerequisites
 
