@@ -1,0 +1,169 @@
+-- Copyright (c) 2019 The DAML Authors. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Tests.RegisterDapOnGadi where
+
+import Main
+
+registerDapOnGadi_happyPath = scenario do
+  
+  ----------------------------
+  -- Prerequisites - Start ---
+  ----------------------------
+
+  -- Create our Parties
+  dap <- getParty "DAP Admin"
+  gadi <- getParty "GADI Admin"
+
+  -- Get the current time
+  now <- getTime
+
+  -- Create a DAP instance
+  dapCid <- submit dap do
+    create Dap with admin = dap
+
+  -- Create a Gadi instance
+  gadiCid <- submit gadi do
+    create Gadi with admin = gadi
+
+  ----------------------------
+  -- Prerequisites - End -----
+  ----------------------------    
+
+  -- The DAP creates a proposal to signup to GADI
+  signupCid <- submit dap do
+    exercise dapCid RequestMembership with ..
+
+  -- GADI checks if DAP meets the certification standards and approves the signup request
+  gadiAuthorizedDapCid <- submit gadi do
+    exercise signupCid MembershipRequest_Accept with gadiCid = gadiCid
+
+  -- Assert that the GADI authorisation contract is now visable to DAP on the ledger
+  authorizedDap <- submit dap do
+    fetch gadiAuthorizedDapCid
+
+  -- Fetch our DAP contract so we check it matches to what the GADI authorized DAP contact
+  dap <- submit dap do
+    fetch dapCid
+
+  -- Assert that the authorized DAP by GADI matches our DAP
+  assert (authorizedDap.dap == dap.admin)
+
+registerDapOnGadi_certification_withdrawn = scenario do
+  
+  ----------------------------
+  -- Prerequisites - Start ---
+  ----------------------------
+
+  -- Create our Parties
+  dap <- getParty "DAP Admin"
+  gadi <- getParty "GADI Admin"
+
+  -- Get the current time
+  now <- getTime
+
+  -- Create a DAP instance
+  dapCid <- submit dap do
+    create Dap with admin = dap
+
+  -- Create a Gadi instance
+  gadiCid <- submit gadi do
+    create Gadi with admin = gadi
+
+  ----------------------------
+  -- Prerequisites - End -----
+  ----------------------------
+
+  -- The DAP creates a proposal to signup to GADI
+  signupCid <- submit dap do
+    exercise dapCid RequestMembership with ..
+
+  -- GADI checks if DAP meets the certification standards and approves the signup request
+  authorizedDapCid <- submit gadi do
+    exercise signupCid MembershipRequest_Accept with gadiCid = gadiCid
+
+  -- Assert that the GADI authorisation contract is now visable to DAP on the ledger
+  authorizedDap <- submit dap do
+    fetch authorizedDapCid
+
+  -- GADI decides to remove the certification from the DAP
+  submit gadi do
+    exercise authorizedDapCid AuthorizedDap_WithdrawMembership
+
+  -- Assert that the certification has been withdrawn
+  submitMustFail dap do
+    fetch authorizedDapCid    
+
+registerDapOnGadi_signupRejected = scenario do
+  
+  ----------------------------
+  -- Prerequisites - Start ---
+  ----------------------------
+
+  -- Create our Parties
+  dap <- getParty "DAP Admin"
+  gadi <- getParty "GADI Admin"
+
+  -- Get the current time
+  now <- getTime
+
+  -- Create a DAP instance
+  dapCid <- submit dap do
+    create Dap with admin = dap
+
+  -- Create a Gadi instance
+  gadiCid <- submit gadi do
+    create Gadi with admin = gadi
+
+  ----------------------------
+  -- Prerequisites - End -----
+  ----------------------------
+
+  -- The DAP creates a proposal to signup to GADI
+  signupCid <- submit dap do
+    exercise dapCid RequestMembership with ..
+
+  -- The DAP doesnt match the certification requirements and gets rejected by the GADI
+  submit gadi do
+    exercise signupCid MembershipRequest_Reject
+
+  -- Assert that the signup proposal doesn't exist on the ledger anymore
+  submitMustFail dap do
+    fetch signupCid
+
+registerDapOnGadi_signupCancelled = scenario do  
+
+  ----------------------------
+  -- Prerequisites - Start ---
+  ----------------------------
+
+  -- Create our Parties
+  dap <- getParty "DAP Admin"
+  gadi <- getParty "GADI Admin"
+
+  -- Get the current time
+  now <- getTime
+
+  -- Create a DAP instance
+  dapCid <- submit dap do
+    create Dap with admin = dap
+
+  -- Create a Gadi instance
+  gadiCid <- submit gadi do
+    create Gadi with admin = gadi
+
+  ----------------------------
+  -- Prerequisites - Start ---
+  ----------------------------
+
+  -- The DAP creates a proposal to signup to GADI
+  signupCid <- submit dap do
+    exercise dapCid RequestMembership with ..
+
+  -- The DAP decides to cancel their signup request with the GADI
+  submit dap do
+    exercise signupCid MembershipRequest_Cancel
+
+  -- Assert that the signup proposal doesn't exist on the ledger anymore
+  submitMustFail dap do
+    fetch signupCid

@@ -1,0 +1,104 @@
+-- Copyright (c) 2019 The DAML Authors. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Tests.UserSignsUpWithIssuer where
+
+import Main
+import Types
+
+userSignsUpWithIssuer_happyPath = scenario do
+
+  ----------------------------
+  -- Prerequisites - Start ---
+  ----------------------------
+
+  -- Create our Parties
+  dap <- getParty "DAP Admin"
+  gadi <- getParty "GADI Admin"
+  issuer <- getParty "Issuer Admin"
+  user <- getParty "User"
+
+  -- Create a DAP instance
+  dapCid <- submit dap do
+    create Dap with admin = dap
+
+  -- Create a Gadi instance
+  gadiCid <- submit gadi do
+    create Gadi with admin = gadi
+
+  -- The DAP creates a proposal to signup to GADI
+  signupCid <- submit dap do
+    exercise dapCid RequestMembership with ..
+
+  -- GADI checks if DAP meets the certification standards and approves the signup request
+  authorizedDapCid <- submit gadi do
+    exercise signupCid MembershipRequest_Accept with ..
+    
+  --  Create an Issuer
+  iCid <- submit issuer do create Issuer with admin = issuer
+
+  -- Create an issuer proposal
+  iapCid <- submit issuer do
+    exercise iCid RequestAccount with ..
+    
+  -- DAP approves the Issuer and creates a certification request with the GADI
+  gicpCid <- submit dap do
+    exercise iapCid AccountRequest_Accept with ..
+
+  -- GADI approves the certification request
+  gciCid <- submit gadi do
+    exercise gicpCid CertificationRequest_Accept
+
+  --------------------------
+  -- Prerequisites - End ---
+  --------------------------
+
+  -- Create our user
+  uCid <- submit user do
+    create User with ..
+
+  -- User without a digital address initiates a signup with an Issuer
+  uisupCid <- submit user do
+    exercise uCid RequestSignup with ..
+
+  -- Issuer verifies the users
+  uisupCid <- submit issuer do
+    exercise uisupCid SignupRequest_AddVerification with completedVerification = IdVerification
+  uisupCid <- submit issuer do
+    exercise uisupCid SignupRequest_AddVerification with completedVerification = BiometricData
+  uisupCid <- submit issuer do
+    exercise uisupCid SignupRequest_AddVerification with completedVerification = KnowledgeBasedAuthentication
+  uisupCid <- submit issuer do
+    exercise uisupCid SignupRequest_AddVerification with completedVerification = KnowYourCustomer
+  uisupCid <- submit issuer do    
+    exercise uisupCid SignupRequest_AddVerification with completedVerification = RiskAssessment
+
+  -- User doesnt have a Digital Address, submit a request to DAP
+  dapDigitalAddressProposalCid <- submit issuer do
+    exercise uisupCid SignupRequest_RequestDigitalAddress with ..
+
+  -- DAP approves the request for a new Digital Address -> approves and forwards the request to the GADI
+  dadcpCid <- submit dap do
+    exercise dapDigitalAddressProposalCid DigitalAddressDapRequest_Accept with ..
+
+  -- GADI approves the request with a new Digital Address
+  let digitalAddress = "MyAddress"
+  digitalAddressCid <- submit gadi do
+    exercise dadcpCid DigitalAddressGadiRequest_Accept with ..
+              
+  -- Issuer approves the User and publishes a Verifiable Claim  
+  let
+    verifiableClaims =
+      [ VerifiableClaim with claim = COVID19_IMM ]
+  (udaCid, _) <- submit issuer do
+    exercise uisupCid SignupRequest_Accept with ..
+
+  -- Assert the contents of the new User's Digital Address
+  digitalAddressData <- submit issuer do
+    fetch udaCid
+  user <- submit user do
+    fetch uCid
+  
+  assert (digitalAddressData.digitalAddress == digitalAddress)
+  assert (not (null digitalAddressData.verifiableClaims))
+  assert (length digitalAddressData.verifiableClaims == 1)

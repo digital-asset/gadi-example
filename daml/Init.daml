@@ -1,0 +1,50 @@
+-- Copyright (c) 2019 The DAML Authors. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Init where
+
+import Main
+import Daml.Script
+
+init = do
+  gadi    <- allocatePartyWithHint "GADI" $ PartyIdHint with partyIdHint = "GADI"
+  dap     <- allocatePartyWithHint "DAP" $ PartyIdHint with partyIdHint = "DAP"
+  issuer     <- allocatePartyWithHint "ISSUER" $ PartyIdHint with partyIdHint = "ISSUER"
+  sp   <- allocatePartyWithHint "SP" $ PartyIdHint with partyIdHint = "SP"
+  alice   <- allocatePartyWithHint "Alice" $ PartyIdHint with partyIdHint = "Alice"
+  bob     <- allocatePartyWithHint "Bob" $ PartyIdHint with partyIdHint = "Bob"
+  charlie <- allocatePartyWithHint "Charlie" $ PartyIdHint with partyIdHint = "Charlie"
+  
+  gCid <- submit gadi do createCmd Gadi with admin = gadi
+  dCid <- submit dap do createCmd Dap with admin = dap
+  iCid <- submit issuer do createCmd Issuer with admin = issuer
+  spCid <- submit sp do createCmd ServiceProvider with admin = sp
+  aliceCid <- submit alice do createCmd User with user = alice
+  bobCid <- submit bob do createCmd User with user = bob
+  charlieCid <- submit charlie do createCmd User with user = charlie
+
+  -- rCid <- submit dap do exerciseCmd dCid RequestMembership with ..
+  -- adCid <- submit gadi do exerciseCmd rCid MembershipRequest_Accept with gadiCid = gCid
+
+  -- rCid <- submit issuer do exerciseCmd iCid RequestAccount with ..
+  -- rCid <- submit dap do exerciseCmd rCid AccountRequest_Accept with authorizedDapCid = adCid
+  -- ciCid <- submit gadi do exerciseCmd rCid CertificationRequest_Accept
+  ciWalletCid <- submit dap do createCmd Wallet with provider = dap; owner = issuer; balance = 0.0; observers = []
+
+  -- rCid <- submit sp do exerciseCmd spCid RequestRegistration with ..
+  -- rspCid <- submit dap do exerciseCmd rCid RegistrationRequest_Accept with authorizedDapCid = adCid
+  rspWalletCid <- submit dap do createCmd Wallet with provider = dap; owner = sp; balance = 1000.0; observers = [issuer]
+
+  -- rCid <- submit alice do exerciseCmd aliceCid RequestSignup with issuer = issuer
+  -- rCid <- submit issuer do exerciseCmd rCid SignupRequest_AddVerification with completedVerification = IdVerification
+  -- rCid <- submit issuer do exerciseCmd rCid SignupRequest_AddVerification with completedVerification = BiometricData
+  -- rCid <- submit issuer do exerciseCmd rCid SignupRequest_AddVerification with completedVerification = KnowledgeBasedAuthentication
+  -- rCid <- submit issuer do exerciseCmd rCid SignupRequest_AddVerification with completedVerification = KnowYourCustomer
+  -- rCid <- submit issuer do exerciseCmd rCid SignupRequest_AddVerification with completedVerification = RiskAssessment
+  -- drCid <- submit issuer do exerciseCmd rCid SignupRequest_RequestDigitalAddress with ..
+  -- grCid <- submit dap do exerciseCmd drCid DigitalAddressDapRequest_Accept with authorizedDapCid = adCid
+  -- daCid <- submit gadi do exerciseCmd grCid DigitalAddressGadiRequest_Accept with digitalAddress = "MyAddress"
+  -- let verifiableClaims = [ (VerifiableClaim with claim = COVID19_IMM) ]
+  -- (daCid, idAliceCid) <- submit issuer do exerciseCmd rCid SignupRequest_Accept with digitalAddressCid = daCid; ..
+
+  pure ()

@@ -1,0 +1,58 @@
+-- Copyright (c) 2019 The DAML Authors. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Tests.IssuerRegistersWithTheGadiEcoSystem where
+
+import Main
+
+issuerRequest_happyPath = scenario do
+  
+  ----------------------------
+  -- Prerequisites - Start ---
+  ----------------------------
+
+  -- Create our Parties
+  dap <- getParty "DAP Admin"
+  gadi <- getParty "GADI Admin"
+  issuer <- getParty "Issuer Admin"
+
+  -- Create a DAP instance
+  dapCid <- submit dap do
+    create Dap with admin = dap
+
+  -- Create a Gadi instance
+  gadiCid <- submit gadi do
+    create Gadi with admin = gadi
+
+  -- The DAP creates a proposal to signup to GADI
+  signupCid <- submit dap do
+    exercise dapCid RequestMembership with ..
+
+  -- GADI checks if DAP meets the certification standards and approves the signup request
+  authorizedDapCid <- submit gadi do
+    exercise signupCid MembershipRequest_Accept with gadiCid = gadiCid    
+
+  --------------------------
+  -- Prerequisites - End ---
+  --------------------------
+
+  --  Create an Issuer
+  iCid <- submit issuer do
+    create Issuer with admin = issuer
+
+  -- Create an issuer proposal
+  iapCid <- submit issuer do
+    exercise iCid RequestAccount with ..
+    
+  -- DAP approves the Issuer and creates a certification request with the GADI
+  gicpCid <- submit dap do
+    exercise iapCid AccountRequest_Accept with ..
+
+  -- GADI approves the certification request
+  gciCid <- submit gadi do
+    exercise gicpCid CertificationRequest_Accept
+
+  -- Assert the Certification
+  issuerCertification <- submit issuer do fetch gciCid
+  
+  assert (issuerCertification.issuer == issuer)

@@ -1,0 +1,57 @@
+-- Copyright (c) 2019 The DAML Authors. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Tests.ServiceProviderRegistersWithDap where
+
+import Main
+
+serviceProviderRegistersWithDap_happyPath = scenario do
+
+  ----------------------------
+  -- Prerequisites - Start ---
+  ----------------------------
+
+  -- Create our Parties
+  dap <- getParty "DAP Admin"
+  gadi <- getParty "GADI Admin"
+  serviceProvider <- getParty "Service Provider Admin"
+
+  -- Get the current time
+  now <- getTime
+
+  -- Create a DAP instance
+  dapCid <- submit dap do
+    create Dap with admin = dap
+
+  -- Create a Gadi instance
+  gadiCid <- submit gadi do
+    create Gadi with admin = gadi
+
+  -- The DAP creates a proposal to signup to GADI
+  signupCid <- submit dap do
+    exercise dapCid RequestMembership with ..
+
+  -- GADI checks if DAP meets the certification standards and approves the signup request
+  authorizedDapCid <- submit gadi do
+    exercise signupCid MembershipRequest_Accept with ..
+
+  ----------------------------
+  -- Prerequisites - End -----
+  ----------------------------
+  
+  -- Create a Service Provider
+  spCid <- submit serviceProvider do
+    create ServiceProvider with admin = serviceProvider
+
+  -- Create a register request for our Service Provider
+  spaCid <- submit serviceProvider do
+    exercise spCid RequestRegistration with ..
+
+  -- DAP approves the request and provides evidence that it is fully registered and approved
+  dvspCid <- submit dap do
+    exercise spaCid RegistrationRequest_Accept with ..
+    
+  -- Assert the certificate exists and it contains the expected content
+  certificate <- submit serviceProvider do fetch dvspCid
+
+  assert (certificate.serviceProvider == serviceProvider)

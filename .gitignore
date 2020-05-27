@@ -1,0 +1,7 @@
+.vscode
+.daml
+ui/build
+daml2js
+node_modules
+*.log
+.DS_Store

@@ -1,0 +1,634 @@
+-- Copyright (c) 2019 The DAML Authors. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Main where
+
+import DA.List
+import Types
+
+---------------
+-- DAP Flows --
+---------------
+
+-- Global Address for Digital Identity (GADI)
+template Gadi
+  with
+    admin : Party
+  where
+    signatory admin              
+
+-- Digital Address Provider (DAP)
+template Dap
+  with
+    admin : Party
+  where
+    signatory admin
+
+    controller admin can      
+      nonconsuming RequestMembership : ContractId MembershipRequest
+        with
+          gadi : Party
+        do     
+          -- DAP creates a request to signup to GADI
+          create MembershipRequest with dap = admin; ..
+
+-- Proposal for a DAP to signup to a GADI
+-- Workflow :: DAP > GADI
+-- + Outcome > DAP is issued a contract as certified
+template MembershipRequest
+  with    
+    dap : Party
+    gadi : Party
+  where
+    signatory dap
+    observer gadi
+
+    controller gadi can
+      
+      MembershipRequest_Accept : ContractId AuthorizedDap
+        with
+          gadiCid : ContractId Gadi
+        do                    
+          fetch gadiCid
+          create AuthorizedDap with ..
+                
+      MembershipRequest_Reject : ()
+        do                    
+          return ()
+    
+    controller dap can
+      MembershipRequest_Cancel : ()
+        do
+          return ()
+
+-- Issued by GADI to approve a DAP instnace
+template AuthorizedDap
+  with
+    dap : Party
+    gadi : Party
+  where
+    signatory gadi, dap
+    observer dap
+    
+    controller gadi can
+      
+      -- GADI can withdraw their authorization
+      AuthorizedDap_WithdrawMembership : ()
+        do
+          return ()
+
+------------------
+-- Issuer Flows --
+------------------
+
+-- Identity Issuer
+template Issuer
+  with
+    admin : Party
+  where
+    signatory admin
+
+    controller admin can
+      nonconsuming RequestAccount : ContractId AccountRequest
+        with dap : Party
+        do
+          create AccountRequest with issuer = admin; ..
+
+-- Proposal from an Issuer to a DAP for an Issuer Account
+-- Workflow :: Issuer > DAP [> GADI]
+-- + Outcome -> DAP issues a proposal to GADI to certify the Issuer
+template AccountRequest
+  with
+    issuer : Party
+    dap : Party
+  where
+    signatory issuer
+    observer dap
+
+    controller dap can
+
+      AccountRequest_Accept : ContractId CertificationRequest
+        with
+          authorizedDapCid : ContractId AuthorizedDap
+        do
+          authorizedDap <- fetch authorizedDapCid
+          create CertificationRequest
+            with
+              dap = authorizedDap.dap
+              gadi = authorizedDap.gadi
+              issuer = issuer
+
+      AccountRequest_Reject : ()
+        do
+          return ()
+
+    controller issuer can
+      AccountRequest_Cancel : ()
+        do
+          return ()
+
+-- Proposal from a DAP to Certify an Issuer
+-- Workflow :: [Issuer >] DAP > GADI
+-- + Outcome -> GADI issues a contract to certify the Issuer
+template CertificationRequest
+  with
+    dap : Party
+    gadi : Party
+    issuer : Party
+  where
+    signatory issuer, dap
+    observer gadi
+    
+    controller gadi can
+
+      CertificationRequest_Accept : ContractId CertifiedIssuer
+        do
+          create CertifiedIssuer with ..
+
+      CertificationRequest_Reject : ()
+        do
+          return ()
+
+    controller dap can
+      CertificationRequest_Cancel : ()
+        do
+          return ()
+
+-- Issued by GADI to certify an Issuer
+template CertifiedIssuer
+  with
+    gadi : Party
+    dap : Party
+    issuer : Party
+  where
+    signatory issuer, dap, gadi
+
+    controller gadi can
+      CertifiedIssuer_WithdrawCertification : ()
+        do
+          return ()
+
+----------------------------
+-- Service Provider Flows --
+----------------------------
+
+template ServiceProvider
+  with
+    admin : Party
+  where
+    signatory admin
+
+    controller admin can
+      nonconsuming RequestRegistration : ContractId RegistrationRequest
+        with
+          dap : Party
+        do
+          create RegistrationRequest with serviceProvider = admin; ..
+
+-- Proposal to register a Service Provider
+-- Workflow :: Service Provider > DAP
+-- + Outcome -> DAP issues an approval for the Service Provider
+template RegistrationRequest
+  with
+    serviceProvider : Party
+    dap : Party
+  where
+    signatory serviceProvider
+    observer dap
+    
+    controller dap can
+      
+      RegistrationRequest_Accept : ContractId RegisteredServiceProvider
+        with
+          authorizedDapCid : ContractId AuthorizedDap
+        do
+          -- 1/ Assert the Certified DAP contract is active and retreive it 
+          --    Note - this step fails if target contract not active or the specified ID does not exist
+          authorizedDap <- fetch authorizedDapCid
+
+          -- 2/ Create the contract certifying this Service Provided is verified
+          create RegisteredServiceProvider with ..
+
+      RegistrationRequest_Reject : ()
+        do
+          return ()
+
+    controller serviceProvider can
+
+      RegistrationRequest_Cancel : ()
+        do
+          return ()
+
+-- Issued by a DAP to verify a Service Provider                
+template RegisteredServiceProvider
+  with
+    dap : Party
+    serviceProvider : Party
+  where
+    signatory serviceProvider, dap
+    
+    controller dap can
+      RegisteredServiceProvider_WithdrawRegistration : ()
+        do
+          return ()
+
+----------------
+-- User Flows --
+----------------
+
+template User
+  with
+    user : Party    
+  where
+    signatory user
+
+    controller user can
+      -- User request to signup with an Issuer
+      nonconsuming RequestSignup : ContractId SignupRequest
+        with
+          issuer : Party
+        do
+          create SignupRequest with completedVerifications = []; ..
+
+      -- User wants to authenticate with a Service Provider (Verifier)
+      nonconsuming RequestAuthentication : ContractId AuthenticationRequest
+        with
+          serviceProvider : Party
+        do
+          create AuthenticationRequest with ..
+
+-- Proposal from a User to signup to an Issuer
+-- Workflow :: User > Issuer [> DAP > GADI > DAP]
+-- + Outcome -> User is approved and the issuer creates an Identity in their system and a claim is added to the User's digital address
+template SignupRequest
+  with
+    user : Party
+    issuer : Party
+    completedVerifications : [UserVerification]
+  where
+    signatory user
+    observer issuer
+    ensure unique completedVerifications
+
+    let mandatoryVerifications = [IdVerification, BiometricData, KnowledgeBasedAuthentication, KnowYourCustomer, RiskAssessment]
+        remainingVerifications = filter (`notElem` completedVerifications) mandatoryVerifications
+
+    controller issuer can      
+    
+      SignupRequest_Accept : (ContractId DigitalAddress, ContractId IdentifiedUser)
+        with
+          verifiableClaims : [VerifiableClaim]
+          digitalAddressCid : ContractId DigitalAddress
+        do        
+          -- 1/ Check that all expected vertification steps are completed
+          assertMsg (show remainingVerifications <> " need to be completed before the user can be approved") (null remainingVerifications)
+
+          -- 2/ Create a 'User to Issuer Identity' contract
+          issuerUserIdentityCid <- create IdentifiedUser with ..
+
+          -- 3/ Add claim to users Digital Address
+          digitalAddressCid <- exercise digitalAddressCid DigitalAddress_UpdateClaims with updatedClaims = verifiableClaims
+
+          return (digitalAddressCid, issuerUserIdentityCid)
+
+      -- Adds a completed verification step of the user to the user's signup proposal
+      SignupRequest_AddVerification : ContractId SignupRequest
+        with
+          completedVerification : UserVerification
+        do
+          create this with completedVerifications = dedup (completedVerification :: completedVerifications)
+
+      -- If the user doesn't have a Digital Address, kick off a proposal workflow to get one
+      nonconsuming SignupRequest_RequestDigitalAddress : ContractId DigitalAddressDapRequest
+        with
+          dap : Party
+        do
+          create DigitalAddressDapRequest with ..
+
+      SignupRequest_Reject : ()
+        do
+          return ()
+
+    controller user can
+      SignupRequest_Cancel : ()
+        do
+          return ()
+
+-- Proposal from an Issuer to create a Digital Address to a DAP on behalf of a User
+-- Workflow :: [User >] Issuer > DAP [> GADI > DAP]
+-- + Outcome -> DAP approves and requests a Digital Address from GADI
+template DigitalAddressDapRequest
+  with
+    dap : Party
+    issuer : Party
+    user : Party
+  where
+    signatory user, issuer
+    observer dap
+
+    controller dap can
+      DigitalAddressDapRequest_Accept : ContractId DigitalAddressGadiRequest
+        with
+          authorizedDapCid : ContractId AuthorizedDap
+        do
+          authorizedDap <- fetch authorizedDapCid
+          create DigitalAddressGadiRequest
+            with
+              gadi = authorizedDap.gadi
+              dap = authorizedDap.dap
+              ..
+
+      DigitalAddressDapRequest_Reject : ()
+        do
+          return ()
+
+    controller issuer can
+      DigitalAddressDapRequest_Cancel : ()
+        do
+          return ()
+
+-- Proposal from a DAP for the creation of a Digital Address for a User on behalf of an Issuer
+-- Workflow :: [User > Issuer >] DAP > GADI [> DAP]
+-- + Outcome -> GADI approves and issues a new Digital Address and submits it to the requesting DAP
+template DigitalAddressGadiRequest
+  with
+    gadi : Party
+    dap : Party
+    issuer : Party
+    user : Party
+  where
+    signatory user, issuer, dap
+    observer gadi
+
+    controller gadi can
+      
+      DigitalAddressGadiRequest_Accept : ContractId DigitalAddress
+        with
+          digitalAddress : Text
+        do
+          create DigitalAddress with verifiableClaims = []; ..
+
+      DigitalAddressGadiRequest_Reject : ()
+        do
+          return ()
+
+    controller dap can
+      DigitalAddressGadiRequest_Cancel : ()
+        do
+          return ()                  
+
+-- Issued by a DAP to link a User with their Digital Address and any Verifiable Claims they have
+template DigitalAddress
+  with
+    user : Party
+    issuer : Party
+    dap : Party
+    gadi : Party
+    digitalAddress : Text
+    verifiableClaims : [VerifiableClaim]
+  where
+    signatory user, issuer, dap, gadi
+
+    controller issuer can
+      
+      -- An Issuer can add Verifiable Claims to the Users Digital Address
+      DigitalAddress_UpdateClaims : ContractId DigitalAddress
+        with updatedClaims : [VerifiableClaim]
+        do
+          create this with verifiableClaims = updatedClaims
+          
+-- Issued by an Issuer to Identify a User 
+template IdentifiedUser
+  with
+    issuer : Party
+    user : Party
+  where
+    signatory user, issuer
+
+--------------------------
+-- Authentication Flows --
+--------------------------
+
+-- Proposal from a User for an authentication request from a Service Provider
+-- Workflow :: User > Service Provider [> User]
+-- + Outcome -> Contract written on DAP with the agreed terms from the Service Provider
+template AuthenticationRequest
+  with
+    user : Party
+    serviceProvider : Party
+  where
+    signatory user
+    observer serviceProvider
+
+    controller serviceProvider can
+      
+      -- User meets requirements, send T&Cs and the Service Provider certification to the User
+      AuthenticationRequest_Accept : ContractId AuthenticationTermsProposal
+        with 
+          claim : Claim
+          terms : Text
+          registeredServiceProviderCid : ContractId RegisteredServiceProvider
+        do
+          registeredServiceProvider <- fetch registeredServiceProviderCid
+          create AuthenticationTermsProposal with ..
+
+      -- User does not meet the requirement set by the Service Provider
+      AuthenticationRequest_Reject : ()
+        do
+          return ()
+
+    controller user can
+      AuthenticationRequest_Cancel : ()
+        do
+          return ()                                
+
+-- Proposed T&Cs from the Service Provider for a User authentication request
+-- Workflow :: [User > Service Provider] > User
+-- + Outcome -> User accepts the T&Cs and creates a contract on the DAP
+template AuthenticationTermsProposal
+  with
+    user : Party
+    serviceProvider : Party
+    terms : Text
+    claim : Claim
+  where
+    signatory user, serviceProvider 
+
+    controller user can
+      
+      -- User checks the Service Providers credentials and the terms proposed
+      -- Creates a contract with the agreed to terms and provides the issuer
+      AuthenticationTermsProposal_Accept : ContractId AuthenticationAgreement
+        with 
+          issuer : Party
+        do
+          create AuthenticationAgreement with ..
+
+      -- User doesn't accept either the terms of the Service Providers credentials
+      AuthenticationTermsProposal_Reject : ()
+        do
+          return ()
+
+    controller serviceProvider can
+      AuthenticationTermsProposal_Cancel : ()
+        do
+          return ()                                          
+
+-- Issued by a user when agreeing to the T&Cs from a Service Provider          
+template AuthenticationAgreement    
+  with
+    user : Party
+    serviceProvider : Party
+    issuer : Party
+    claim : Claim
+    terms : Text
+  where
+    signatory user, serviceProvider
+    
+    controller serviceProvider can
+      nonconsuming AuthenticationAgreement_RequestValidation : ContractId ValidationRequest
+        with
+          walletCid : ContractId Wallet
+        do
+          create ValidationRequest with ..
+
+      AuthenticationAgreement_Authenticate : ContractId AuthenticationResult
+        with
+          validationResultCid : ContractId ValidationResult
+        do
+          validationResult <- fetch validationResultCid
+          create AuthenticationResult with claim = validationResult.claim; ..
+          
+-- Issued by a Service Provider for an Authenticated User
+template AuthenticationResult
+  with
+    user : Party
+    serviceProvider : Party
+    issuer : Party
+    claim : Claim
+  where
+    signatory user, serviceProvider
+
+
+--------------------------
+-- Validation Flows --
+--------------------------
+
+-- Service Provider requests to verify a users credentials against its Issuer
+-- Workflow :: Service Provider > Issuer [> Service Provider > Issuer]
+-- + Outcome -> Issuer accepts and sends the T&Cs to the Service Provider
+template ValidationRequest
+  with
+    user : Party
+    serviceProvider : Party
+    issuer : Party
+    claim : Claim
+    walletCid : ContractId Wallet
+  where
+    signatory serviceProvider
+    observer issuer
+
+    controller issuer can
+      
+      ValidationRequest_Accept : ContractId ValidationTermsProposal
+        with
+          terms : Text
+          price : Decimal
+        do
+          create ValidationTermsProposal with ..
+      
+      ValidationRequest_Reject : ()
+        do
+          return ()
+
+    controller serviceProvider can
+      ValidationRequest_Cancel : ()
+        do
+          return ()
+
+-- Issuer proposes the T&Cs to the Service Provider for verifying the User
+-- Workflow :: [Service Provider > Issuer >] Service Provider
+-- + Outcome -> Service Provider accepts the T&Cs
+template ValidationTermsProposal
+  with
+    user : Party
+    serviceProvider : Party
+    issuer : Party
+    claim : Claim
+    terms : Text
+    price : Decimal
+    walletCid : ContractId Wallet
+  where
+    signatory serviceProvider, issuer
+
+    controller serviceProvider can
+      
+      ValidationTermsProposal_Accept : ContractId ValidationAgreement        
+        do
+          create ValidationAgreement with ..
+      
+      ValidationTermsProposal_Reject : ()
+        do
+          return ()
+
+    controller issuer can
+      ValidationTermsProposal_Cancel : ()
+        do
+          return ()
+
+-- Issued by the Service Provider when agreeing to the T&Cs set by the Issuer in return for providing a Users Credentials
+template ValidationAgreement
+  with
+    user : Party
+    serviceProvider : Party
+    issuer : Party
+    claim : Claim
+    terms : Text
+    price : Decimal
+    walletCid : ContractId Wallet
+  where
+    signatory serviceProvider, issuer
+
+    controller issuer can
+      ValidationAgreement_ValidateClaims : (ContractId Wallet, ContractId Wallet, ContractId ValidationResult)
+        with
+          issuerWalletCid : ContractId Wallet
+        do
+          (newSpWalletCid, newIssuerWalletCid) <- exercise walletCid Transfer with targetWalletCid = issuerWalletCid; amount = price
+          validationResultCid <- create ValidationResult with ..
+          return (newSpWalletCid, newIssuerWalletCid, validationResultCid)
+
+-- Result of the issuer validation of claims
+template ValidationResult
+  with
+    user : Party
+    serviceProvider : Party
+    issuer : Party
+    claim : Claim
+    terms : Text
+    price : Decimal
+  where
+    signatory serviceProvider, issuer
+
+-- Wallet to hold funds
+template Wallet
+  with
+    provider : Party
+    owner : Party
+    balance : Decimal
+    observers : [Party]
+  where
+    signatory provider
+    observer owner, observers
+
+    controller owner can
+      Transfer : (ContractId Wallet, ContractId Wallet)
+        with
+          targetWalletCid : ContractId Wallet
+          amount : Decimal
+        do
+          targetWallet <- fetch targetWalletCid
+          archive targetWalletCid
+          newTargetWalletCid <- create targetWallet with balance = targetWallet.balance + amount
+          newWalletCid <- create this with balance = balance - amount
+          return (newWalletCid, newTargetWalletCid)

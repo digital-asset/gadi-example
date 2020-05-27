@@ -1,0 +1,156 @@
+-- Copyright (c) 2019 The DAML Authors. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Tests.VerifyUserClaim where
+
+import Main
+import Types
+
+verifyUserClaim = scenario do
+  
+  ----------------------------
+  -- Prerequisites - Start ---
+  ----------------------------
+
+  -- Create our Parties
+  dap <- getParty "DAP Admin"
+  gadi <- getParty "GADI Admin"
+  issuer <- getParty "Issuer Admin"
+  patient <- getParty "Patient"
+  serviceProvider <- getParty "Service Provider Admin"
+
+  -- Create a DAP instance
+  dapCid <- submit dap do
+    create Dap with admin = dap
+
+  -- Create a Gadi instance
+  gadiCid <- submit gadi do
+    create Gadi with admin = gadi
+
+  -- The DAP creates a proposal to signup to GADI
+  signupCid <- submit dap do
+    exercise dapCid RequestMembership with ..
+
+  -- GADI checks if DAP meets the certification standards and approves the signup request
+  authorizedDapCid <- submit gadi do
+    exercise signupCid MembershipRequest_Accept with ..
+    
+  --  Create an Issuer
+  iCid <- submit issuer do
+    create Issuer with admin = issuer
+
+  -- Create an issuer proposal
+  iapCid <- submit issuer do
+    exercise iCid RequestAccount with ..
+    
+  -- DAP approves the Issuer and creates a certification request with the GADI
+  gicpCid <- submit dap do
+    exercise iapCid AccountRequest_Accept with ..
+
+  -- GADI approves the certification request
+  gciCid <- submit gadi do
+    exercise gicpCid CertificationRequest_Accept
+
+  -- Create wallet for issuer
+  iWalletCid <- submit dap do
+    create Wallet with provider = dap; owner = issuer; balance = 1000.0; observers = []
+
+  -- Create a Service Provider
+  spCid <- submit serviceProvider do
+    create ServiceProvider with admin = serviceProvider
+
+  -- Create a register request for our Service Provider
+  spaCid <- submit serviceProvider do
+    exercise spCid RequestRegistration with ..
+
+  -- DAP approves the request and provides evidence that it is fully registered and approved
+  registeredServiceProviderCid <- submit dap do
+    exercise spaCid RegistrationRequest_Accept with ..
+
+  -- Create wallet for service provider
+  spWalletCid <- submit dap do
+    create Wallet with provider = dap; owner = serviceProvider; balance = 1000.0; observers = [issuer]
+
+  -- Create our user
+  uCid <- submit patient do
+    create User with user = patient        
+
+  -- User without a digital address initiates a signup with an Issuer
+  uisupCid <- submit patient do
+    exercise uCid RequestSignup with ..
+
+  -- Issuer verifies the users
+  uisupCid <- submit issuer do
+    exercise uisupCid SignupRequest_AddVerification with completedVerification = IdVerification
+  uisupCid <- submit issuer do
+    exercise uisupCid SignupRequest_AddVerification with completedVerification = BiometricData
+  uisupCid <- submit issuer do
+    exercise uisupCid SignupRequest_AddVerification with completedVerification = KnowledgeBasedAuthentication
+  uisupCid <- submit issuer do
+    exercise uisupCid SignupRequest_AddVerification with completedVerification = KnowYourCustomer
+  uisupCid <- submit issuer do    
+    exercise uisupCid SignupRequest_AddVerification with completedVerification = RiskAssessment
+
+  -- User doesnt have a Digital Address, submit a request to DAP
+  dapDigitalAddressProposalCid <- submit issuer do
+    exercise uisupCid SignupRequest_RequestDigitalAddress with ..
+
+  -- DAP approves the request for a new Digital Address -> approves and forwards the request to the GADI
+  dadcpCid <- submit dap do
+    exercise dapDigitalAddressProposalCid DigitalAddressDapRequest_Accept with ..
+
+  -- GADI approves the request with a new Digital Address
+  digitalAddressCid <- submit gadi do
+    exercise dadcpCid DigitalAddressGadiRequest_Accept with digitalAddress = "MyAddress"
+              
+  -- Issuer approves the User and publishes a Verifiable Claim  
+  let verifiableClaims = [ (VerifiableClaim with claim = COVID19_IMM) ]
+  (udaCid, iuiCid) <- submit issuer do
+    exercise uisupCid SignupRequest_Accept with ..
+
+  --------------------------
+  -- Prerequisites - End ---
+  --------------------------
+
+  -- User creates an authentication request with a Service Provider
+  uarpCid <- submit patient do
+    exercise uCid RequestAuthentication with ..
+
+  -- The user meets the requirements thus the Service Provider proposes the T&Cs to the user
+  spatpCid <- submit serviceProvider do
+    exercise uarpCid AuthenticationRequest_Accept
+      with 
+        terms = "Service Provider T&Cs"
+        claim = COVID19_IMM
+        registeredServiceProviderCid
+
+  -- User approves of the Terms set and creates a contract containing the terms with visability to the DAP
+  uvaCid <- submit patient do
+    exercise spatpCid AuthenticationTermsProposal_Accept with ..
+        
+  -- Service Provider checks the User Verification Agreement contract and submits a validation request to the issuer
+  iuvpCid <- submit serviceProvider do
+    exercise uvaCid AuthenticationAgreement_RequestValidation with walletCid = spWalletCid
+ 
+  -- The issuer accepts the request and sends the T&Cs to the Service Provider
+  ivutpCid <- submit issuer do
+    exercise iuvpCid ValidationRequest_Accept with terms = "Issuer T&Cs"; price = 10.0
+
+  -- The Service Provider accepts the terms set by the issuer
+  spudaCid <- submit serviceProvider do
+    exercise ivutpCid ValidationTermsProposal_Accept
+
+  -- The issue provides the verifiable claims to the Service Provider
+  (spWalletCid, iWalletCid, validationResultCid) <- submit issuer do
+    exercise spudaCid ValidationAgreement_ValidateClaims with issuerWalletCid = iWalletCid
+
+  -- The Service Provicer validates the Verifiable Claims and validates the user
+  spauCid <- submit serviceProvider do
+    exercise uvaCid AuthenticationAgreement_Authenticate with ..
+
+  -- Assert the Authenticated user contract is created correctly on the ledger
+  authenticatedUser <- submit serviceProvider do fetch spauCid
+
+  assert (authenticatedUser.user == patient)
+  assert (authenticatedUser.issuer == issuer)
+  assert (authenticatedUser.serviceProvider == serviceProvider)

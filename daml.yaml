@@ -1,0 +1,16 @@
+sdk-version: 1.1.1
+name: digital-trust
+version: 1.0.0
+source: daml
+parties:
+  - ISSUER
+  - DAP
+  - GADI
+init-script: Init:init
+sandbox-options:
+  - --ledgerid=digital-trust
+  - -w
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
